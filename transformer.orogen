@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 name "transformer"
 
 using_library "transformer"
@@ -7,9 +9,9 @@ import_types_from "transformer/TransformationStatus.hpp"
 typekit do
     # This one is actually for the transformer plugin, but we want to avoid
     # adding a new package just for that
-    export_types '/std/vector</base/samples/RigidBodyState>'
-    export_types '/transformer/TransformerStatus'
-end	
+    export_types "/std/vector</base/samples/RigidBodyState>"
+    export_types "/transformer/TransformerStatus"
+end
 
 # Task that allows to broadcast transformer information, mostly used for GUI
 task_context "Task" do
@@ -26,4 +28,4 @@ task_context "Task" do
     output_port "configuration_state", "transformer/ConfigurationState"
 end
 
-simple_deployment 'transformer_broadcaster', 'transformer::Task'
+simple_deployment "transformer_broadcaster", "transformer::Task"
