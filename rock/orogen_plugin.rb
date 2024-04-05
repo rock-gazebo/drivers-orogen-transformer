@@ -6,53 +6,53 @@ module TransformerPlugin
         # Code generation to generate code for the first task class that has a
         # transformer in the task hierarchy
         def generate_root_class(task, config)
-	    task.add_base_member("transformer", "_#{config.name}", "transformer::Transformer").
-		initializer( "_#{config.name}(#{config.priority})" )
-	    task.add_base_member("nextStatusTime", "_nextStatusTime", "base::Time")
+            task.add_base_member("transformer", "_#{config.name}", "transformer::Transformer").
+                initializer( "_#{config.name}(#{config.priority})" )
+            task.add_base_member("nextStatusTime", "_nextStatusTime", "base::Time")
 
-	    task.in_base_hook("configure", "
+            task.in_base_hook("configure", "
     _#{config.name}.clear();
     _#{config.name}.setTimeout( base::Time::fromSeconds( _transformer_max_latency.value()) );
-	    ")	    
-	    
+            ")
+
             task.add_base_member("transformer_status", "transformerStatus", "transformer::TransformerStatus")
             task.in_base_hook("configure", "    transformerStatus.transformations.clear();")
 
-	    # Read out the properties which contains a vector of static transforms
-	    # and push them to the transformer
+            # Read out the properties which contains a vector of static transforms
+            # and push them to the transformer
             task.in_base_hook("configure", "
     std::vector<base::samples::RigidBodyState> const& staticTransforms =
         _static_transformations.set();
      for (size_t i = 0; i < staticTransforms.size(); ++i)
         _#{config.name}.pushStaticTransformation(staticTransforms[i]);")
 
-	    task.in_base_hook("update", "
+            task.in_base_hook("update", "
     base::samples::RigidBodyState dynamicTransform;
     while(_dynamic_transformations.read(dynamicTransform, false) == RTT::NewData) {
-	_#{config.name}.pushDynamicTransformation(dynamicTransform);
+        _#{config.name}.pushDynamicTransformation(dynamicTransform);
     }
 
     const base::Time statusPeriod( base::Time::fromSeconds( _#{config.name}_status_period.value() ) );
     do
     {
-	const base::Time curTime(base::Time::now());
-	if( curTime > _nextStatusTime )
-	{
-	    _nextStatusTime = curTime + statusPeriod;
+        const base::Time curTime(base::Time::now());
+        if( curTime > _nextStatusTime )
+        {
+            _nextStatusTime = curTime + statusPeriod;
             ::aggregator::StreamAlignerStatus stream_aligner_status = _#{config.name}.getStatus();
             stream_aligner_status.name = getName();
-	    _#{config.name}_stream_aligner_status.write(stream_aligner_status);
+            _#{config.name}_stream_aligner_status.write(stream_aligner_status);
             _#{config.name}_status.write(_transformer.getTransformerStatus());
-	}
+        }
     }
     while(_#{config.name}.step());")
 
-	    #unregister in cleanup
-	    task.in_base_hook("cleanup", "
+            #unregister in cleanup
+            task.in_base_hook("cleanup", "
     _#{config.name}.clear();")
         end
 
-	def generate(task, config)
+        def generate(task, config)
             task.project.using_library('transformer', :typekit => false)
             port_listener_ext = task.extension("port_listener", false)
 
@@ -63,18 +63,18 @@ module TransformerPlugin
 
             base_status_index = config.supercall([], :each_needed_transformation).to_a.size
             task.in_base_hook("configure", "    transformerStatus.transformations.resize(#{base_status_index + config.needed_transformations.size()});")
-	    task.add_base_header_code("#include <transformer/Transformer.hpp>", true)
+            task.add_base_header_code("#include <transformer/Transformer.hpp>", true)
             task.add_base_header_code("#include <aggregator/DetermineSampleTimestamp.hpp>", true)
 
             needed_transformations = config.needed_transformations.sort_by { |t| [t.from, t.to] }
-	    needed_transformations.each_with_index do |t, i|
+            needed_transformations.each_with_index do |t, i|
                 # BIG FAT WARNING: the key used here for #add_base_member MUST
                 # be lexicographically bigger than "transformer" to make sure
                 # that the transformer object is constructed before these
                 # members
-		task.add_base_member("transformer_transformation", member_name(t), "transformer::Transformation &").
-		    initializer("#{member_name(t)}(_#{config.name}.registerTransformation(\"#{t.from}\", \"#{t.to}\"))")
-	    end
+                task.add_base_member("transformer_transformation", member_name(t), "transformer::Transformation &").
+                    initializer("#{member_name(t)}(_#{config.name}.registerTransformation(\"#{t.from}\", \"#{t.to}\"))")
+            end
 
             # Apply the frame selection from the properties inside the configureHook
             frame_selection = config.available_frames.sort.map do |frame_name|
@@ -84,45 +84,41 @@ module TransformerPlugin
             end.compact
             task.in_base_hook("configure", frame_selection.join("\n"))
 
-	    config.streams.sort_by(&:name).each do |stream|
-		stream_data_type = type_cxxname(task, stream)
+            config.streams.sort_by(&:name).each do |stream|
+                stream_data_type = type_cxxname(task, stream)
 
-		# Pull the data in the update hook
-		port_listener_ext.add_port_listener(stream.name) do |sample_name|
-                    ### HACK TODO
-                    # This needs fixing by annotating opaques (i.e. telling
-                    # oroGen that some opaques 'behave as' pointers)
-                    time_access =
-                        if stream_data_type =~ /ReadOnlyPointer/ then "aggregator::determineTimestamp(*#{sample_name})"
-                        else "aggregator::determineTimestamp(#{sample_name})"
-                        end
+                # Pull the data in the update hook
+                port_listener_ext.add_port_listener(stream.name) do |sample_name|
+                    time_access = PortListenerPlugin.resolve_time_field(
+                        stream_data_type, stream.time_field, sample_name
+                    )
 
-                    "	_#{config.name}.pushData(#{idx_name(stream)}, #{time_access}, #{sample_name});"
-		end
+                    "   _#{config.name}.pushData(#{idx_name(stream)}, #{time_access}, #{sample_name});"
+                end
 
-		#add variable for index
-		task.add_base_member("transformer", idx_name(stream), "int")
-		
-		#add callbacks
-		task.add_user_method("void", callback_name(stream), "const base::Time &ts, const #{stream_data_type} &#{stream.name}_sample").
-		body("    throw std::runtime_error(\"Transformer callback for #{stream.name} not implemented\");")
+                #add variable for index
+                task.add_base_member("transformer", idx_name(stream), "int")
 
-		#register streams at transformer
-		task.in_base_hook("configure", "
+                #add callbacks
+                task.add_user_method("void", callback_name(stream), "const base::Time &ts, const #{stream_data_type} &#{stream.name}_sample").
+                body("    throw std::runtime_error(\"Transformer callback for #{stream.name} not implemented\");")
+
+                #register streams at transformer
+                task.in_base_hook("configure", "
     {
     const double #{stream.name}Period = _#{stream.name}_period.value();
     #{idx_name(stream)} = _#{config.name}.registerDataStream< #{stream_data_type} >(
-		    base::Time::fromSeconds(#{stream.name}Period), boost::bind( &#{task.class_name}Base::#{callback_name(stream)}, this, _1, _2), #{stream.priority}, \"#{stream.name}\");
+                    base::Time::fromSeconds(#{stream.name}Period), boost::bind( &#{task.class_name}Base::#{callback_name(stream)}, this, _1, _2), #{stream.priority}, \"#{stream.name}\");
     }")
 
-		# disable streams in start hook, which are not connected
-		task.in_base_hook("start", "
-		    if( !_#{stream.name}.connected() ) _#{config.name}.disableStream( #{idx_name(stream)} );")
+                # disable streams in start hook, which are not connected
+                task.in_base_hook("start", "
+                    if( !_#{stream.name}.connected() ) _#{config.name}.disableStream( #{idx_name(stream)} );")
 
-		#unregister in cleanup
-		task.in_base_hook("cleanup", "     _#{config.name}.unregisterDataStream(#{idx_name(stream)});")
-	    end
-	end
+                #unregister in cleanup
+                task.in_base_hook("cleanup", "     _#{config.name}.unregisterDataStream(#{idx_name(stream)});")
+            end
+        end
 
         def member_name(t)
             "_#{t.from}2#{t.to}"
@@ -137,10 +133,10 @@ module TransformerPlugin
             if(!port)
                 raise "Error trying to register nonexisting port " + name + " to the transformer"
             end
-        
+
             port.type.cxx_name
         end
-        
+
         def callback_name(stream)
             "#{stream.name}TransformerCallback"
         end
@@ -218,53 +214,53 @@ module TransformerPlugin
         #
         # When callbacks are called for this stream, it is guaranteed that all
         # transformations declared with #transform are available
-	class StreamDescription
+        class StreamDescription
             # The stream name
-	    attr_reader :name
+            attr_reader :name
             # The stream period
-	    attr_reader :period
+            attr_reader :period
             # The stream period
-	    attr_reader :priority
+            attr_reader :priority
 
-	    def initialize(name, period, priority)
-		@name   = name
-		@period = period
+            def initialize(name, period, priority)
+                @name   = name
+                @period = period
                 @priority = priority
-	    end
-	end
-	
+            end
+        end
+
         # A transformation needed by the component computation
         #
         # This structure tells the system that the +from+ => +to+ transformation
         # will be needed at runtime by the component's computation
-	class NeededTransformation
+        class NeededTransformation
             # [String] The transformation source
-	    attr_reader :from
+            attr_reader :from
             # [String] The transformation target
-	    attr_reader :to
-	    
-	    def initialize(from, to)
-		@from = from
-		@to = to
-	    end
-	end
+            attr_reader :to
+
+            def initialize(from, to)
+                @from = from
+                @to = to
+            end
+        end
 
         # A transformation associated with a port
         #
         # This structure tells the system that the input or output data flowing
         # through +port_name+ is associated with the +from+ => +to+
         # transformation.
-	class TransformationPort
-	    attr_reader :from
-	    attr_reader :to
+        class TransformationPort
+            attr_reader :from
+            attr_reader :to
             attr_reader :port_name
-	    
-	    def initialize(from, to, port_name)
-		@from = from
-		@to = to
+
+            def initialize(from, to, port_name)
+                @from = from
+                @to = to
                 @port_name = port_name
-	    end
-	end
+            end
+        end
 
         # Proxy class used to allow additional configuration
         class TransformationConfigurationProxy
@@ -294,20 +290,20 @@ module TransformerPlugin
         end
 
         def name; "transformer".freeze end
-	
+
         attr_predicate :default?, true
 
         # The underlying task context
         attr_reader :task
 
         # The transformer max latency
-	dsl_attribute :max_latency do |value|
+        dsl_attribute :max_latency do |value|
             Float(value)
         end
 
         # [Array<StreamDescription>] the list of streams that get aligned by the
         # transformer
-	attr_reader :streams
+        attr_reader :streams
         # [Set<String>] set of available frames
         attr_reader :available_frames
         # [Map<Orocos::Spec::Port, String>] associations between port and
@@ -318,7 +314,7 @@ module TransformerPlugin
         attr_reader :transform_associations
         # [Array<NeededTransformations> the list of transformations that should
         # be provided by the transformer at runtime
-	attr_reader :needed_transformations
+        attr_reader :needed_transformations
         # [Map<Orocos::Spec::InputPort, TransformationPort>] an association between
         # input ports and the transformations they provide. The ports must be of
         # type base/samples/RigidBodyState
@@ -330,50 +326,51 @@ module TransformerPlugin
         # [Set<String>] a set of frames for which a configuration property
         # should be added to the component
         attr_reader :configurable_frames
-	# [Integer] the priority value which is given to dynamic transformation streams
-	attr_reader :priority
+        # [Integer] the priority value which is given to dynamic transformation streams
+        attr_reader :priority
 
-	def initialize(name, task)
+        def initialize(name, task)
             super(name)
             @task = task
 
-	    @streams = Array.new()
+            @streams = Array.new()
             @default = true
             @available_frames = Set.new
             @frame_associations = Hash.new
             @transform_associations = Hash.new
 
-	    @needed_transformations = Array.new
+            @needed_transformations = Array.new
             @transform_outputs = Hash.new
             @transform_inputs  = Hash.new
 
             @configurable_frames = Set.new
             @priority_counter = 0
-	    @priority = -10
-	end
+            @priority = -10
+        end
 
-	# set the priority of the dynamic transformation streams
-	def transform_priority( priority )
-	    @priority = priority
-	end
-	
+        # set the priority of the dynamic transformation streams
+        def transform_priority( priority )
+            @priority = priority
+        end
+
         # Requires the transformer to align the given input port on the
         # transformations
-	def align_port(name, period = 0, priority = nil)
+        def align_port(name, period = 0, priority = nil)
             if !task.has_input_port?(name)
                 raise ArgumentError, "#{task.name} has no input port called #{name}, cannot align"
             end
+
             if priority
                 streams << StreamDescription.new(name, period, priority)
             else
                 streams << StreamDescription.new(name, period, (@priority_counter += 1))
             end
-	end
+        end
 
         # Explicitely declares some frames
         #
         # This is usually not needed, as frames are implicitly declared with
-        # #transform, #transform_output, #transform_input, 
+        # #transform, #transform_output, #transform_input,
         # #associate_frame_to_ports and #configurable_frames
         def frames(*frame_names)
             frame_names.each do |name|
@@ -441,7 +438,7 @@ module TransformerPlugin
             available_frames.each(&block)
             supercall(nil, :each_frame, &block)
         end
-        
+
         # Enumerates all frames that can be configured at runtime
         def each_dynamicall_mapped_frame(&block)
             available_frames.each do |frame_name|
@@ -544,7 +541,7 @@ module TransformerPlugin
         end
 
         # Like #find_transform_of_port, but raises ArgumentError if there is no
-        # associated transformation 
+        # associated transformation
         def transform_of_port(port)
             if result = find_transform_of_port(port)
                 result
@@ -660,10 +657,10 @@ module TransformerPlugin
         # from +from+ to +to+ to perform its computation
         #
         # The frames are marked as configurable
-	def transform(from, to)
+        def transform(from, to)
             configurable_frames(from, to)
-	    needed_transformations.push(NeededTransformation.new(from.to_s, to.to_s))
-	end
+            needed_transformations.push(NeededTransformation.new(from.to_s, to.to_s))
+        end
 
         # @deprecated
         #
@@ -743,15 +740,15 @@ module TransformerPlugin
 
                 ## Status ports and period property
                 task.output_port("#{name}_stream_aligner_status", '/aggregator/StreamAlignerStatus').
-		    doc "Status information on the stream aligner that is underlying the transformer."
+                    doc "Status information on the stream aligner that is underlying the transformer."
                 Orocos::Spec.info("transformer: adding port #{name}_status to #{task.name}")
                 task.output_port("#{name}_status", '/transformer/TransformerStatus').
                     doc "Status information on the transformer internal state"
                 Orocos::Spec.info("transformer: adding output port #{name}_status to #{task.name}")
-		task.property("#{name}_status_period", '/double', 1.0).
-		    doc "Minimum system time in seconds between two updates of the status ports"
-		Orocos::Spec.info("Adding property #{name}_status_period to #{task.name}")
-                
+                task.property("#{name}_status_period", '/double', 1.0).
+                    doc "Minimum system time in seconds between two updates of the status ports"
+                Orocos::Spec.info("Adding property #{name}_status_period to #{task.name}")
+
                 # Create ports for transformations
                 task.property('static_transformations', '/std/vector</base/samples/RigidBodyState>').
                     doc "list of static transformations"
@@ -759,7 +756,7 @@ module TransformerPlugin
                     multiplexes.
                     needs_reliable_connection
             end
-                
+
             # Add period property for every data stream
             streams.each do |stream|
                 property_name = "#{stream.name}_period"
@@ -768,7 +765,7 @@ module TransformerPlugin
                         doc "Time in s between #{stream.name} readings"
                     Orocos::Spec.info("transformer: adding property #{property_name} to #{task.name}")
                 end
-            end	    
+            end
 
             # Add a configuration property for the configurable frame names
             configurable_frames.each do |name|
@@ -807,7 +804,7 @@ module TransformerPlugin
                 # Just yield if the frame is used as a transformation output
                 each_transform_output do |port, transform|
                     if transform.from == frame_name || transform.to == frame_name
-                        yield(frame_name) 
+                        yield(frame_name)
                         break
                     end
                 end
@@ -898,7 +895,7 @@ class Orocos::Spec::TaskContext
 
         config.instance_eval(&block)
         if config.needs_transformer? && !config.max_latency
-            raise "not max_latency specified for transformer" 
+            raise "not max_latency specified for transformer"
         end
 
         config.update_spec
