@@ -219,13 +219,14 @@ module TransformerPlugin
             attr_reader :name
             # The stream period
             attr_reader :period
-            # The stream period
             attr_reader :priority
+            attr_reader :time_field
 
-            def initialize(name, period, priority)
+            def initialize(name, period, priority, time_field)
                 @name   = name
                 @period = period
                 @priority = priority
+                @time_field = time_field
             end
         end
 
@@ -355,15 +356,18 @@ module TransformerPlugin
 
         # Requires the transformer to align the given input port on the
         # transformations
-        def align_port(name, period = 0, priority = nil)
+        def align_port(name, period = 0, priority = nil, time_field: "time")
             if !task.has_input_port?(name)
                 raise ArgumentError, "#{task.name} has no input port called #{name}, cannot align"
             end
 
             if priority
-                streams << StreamDescription.new(name, period, priority)
+                streams << StreamDescription.new(name, period, priority, time_field)
             else
-                streams << StreamDescription.new(name, period, (@priority_counter += 1))
+                streams << StreamDescription.new(name,
+                                                 period,
+                                                 (@priority_counter += 1),
+                                                 time_field)
             end
         end
 
