@@ -65,6 +65,7 @@ module TransformerPlugin
             task.in_base_hook("configure", "    transformerStatus.transformations.resize(#{base_status_index + config.needed_transformations.size()});")
             task.add_base_header_code("#include <transformer/Transformer.hpp>", true)
             task.add_base_header_code("#include <aggregator/DetermineSampleTimestamp.hpp>", true)
+            task.add_base_header_code("#include <functional>", true)
 
             needed_transformations = config.needed_transformations.sort_by { |t| [t.from, t.to] }
             needed_transformations.each_with_index do |t, i|
@@ -108,7 +109,7 @@ module TransformerPlugin
     {
     const double #{stream.name}Period = _#{stream.name}_period.value();
     #{idx_name(stream)} = _#{config.name}.registerDataStream< #{stream_data_type} >(
-                    base::Time::fromSeconds(#{stream.name}Period), boost::bind( &#{task.class_name}Base::#{callback_name(stream)}, this, _1, _2), #{stream.priority}, \"#{stream.name}\");
+                    base::Time::fromSeconds(#{stream.name}Period), std::bind( &#{task.class_name}Base::#{callback_name(stream)}, this, std::placeholders::_1, std::placeholders::_2), #{stream.priority}, \"#{stream.name}\");
     }")
 
                 # disable streams in start hook, which are not connected
